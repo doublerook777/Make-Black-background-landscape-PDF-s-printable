@@ -1,4 +1,6 @@
-# Make-Black-background-landscape-PDF-s-printable <br/>
+<p align="center">
+ # Make-Black-background-landscape-PDF-s-printable
+</p>
 A script to manipulate PDF's and convert them into B&amp;W A4 format automatically for easy printing.<br/>
 <p align="center">
   **HOW TO USE**
