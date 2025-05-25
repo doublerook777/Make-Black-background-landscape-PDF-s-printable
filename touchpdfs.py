@@ -1,32 +1,37 @@
 import os
-import subprocess
 import sys
+import subprocess
 import threading
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-# === Step 1: Auto-check dependencies ===
+# === STEP 1: Check for required packages and handle permission errors gracefully ===
 def check_and_install(package, pip_name):
     try:
         __import__(package)
     except ImportError:
         answer = messagebox.askyesno("Missing Package", f"'{pip_name}' is not installed. Install it now?")
         if answer:
-            subprocess.check_call([sys.executable, "-m", "pip", "install", pip_name])
+            try:
+                subprocess.check_call([sys.executable, "-m", "pip", "install", pip_name])
+            except subprocess.CalledProcessError:
+                messagebox.showerror("Permission Denied",
+                    f"Failed to install '{pip_name}'.\n\nPlease re-run this program as administrator and try again.")
+                sys.exit(1)
         else:
             sys.exit()
 
+# Only install if missing
 for pkg, pipname in zip(["fitz", "PIL", "fpdf", "PyPDF2"], ["pymupdf", "Pillow", "fpdf", "PyPDF2"]):
     check_and_install(pkg, pipname)
 
-# === Step 2: Import after checking ===
+# === STEP 2: Import all dependencies after confirming installation ===
 import fitz
 from PIL import Image, ImageOps
 from fpdf import FPDF
 from PyPDF2 import PdfMerger
 
-# === Step 3: PDF Processing Functions ===
-
+# === STEP 3: PDF processing functions (same as before) ===
 def invert_colors_and_convert_to_images(pdf_path, output_dir):
     doc = fitz.open(pdf_path)
     image_paths = []
@@ -123,8 +128,7 @@ def arrange_pdfs(input_dir, output_dir):
             for img_path in image_paths:
                 os.remove(img_path)
 
-# === Step 4: Tkinter GUI with Dark Theme ===
-
+# === STEP 4: GUI with dark theme, progress bar, and clean handling ===
 class PDFToolApp:
     def __init__(self, root):
         self.root = root
@@ -137,7 +141,6 @@ class PDFToolApp:
         style = ttk.Style(self.root)
         self.root.configure(bg="#2b2b2b")
         style.theme_use("clam")
-
         style.configure("TLabel", background="#2b2b2b", foreground="white")
         style.configure("TButton", background="#3c3f41", foreground="white")
         style.configure("TEntry", fieldbackground="#3c3f41", foreground="white")
@@ -168,7 +171,6 @@ class PDFToolApp:
         ttk.Button(self.root, text="Browse", command=self.browse_output).pack(pady=(0, 10))
 
         ttk.Button(self.root, text="Run", command=self.run_operation).pack()
-
         self.progress = ttk.Progressbar(self.root, orient="horizontal", length=400, mode="indeterminate")
         self.progress.pack(pady=10)
 
@@ -234,7 +236,7 @@ class PDFToolApp:
         self.progress.stop()
         self.enable_ui()
 
-# === Step 5: Launch App ===
+# === STEP 5: Launch the app ===
 if __name__ == "__main__":
     root = tk.Tk()
     app = PDFToolApp(root)
