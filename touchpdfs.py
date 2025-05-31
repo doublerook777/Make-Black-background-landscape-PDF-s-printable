@@ -1,3 +1,5 @@
+print("Launching TouchPDFs...")
+
 import os
 import sys
 import subprocess
@@ -5,130 +7,52 @@ import threading
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-# === STEP 1: Check for required packages and handle permission errors gracefully ===
+# === STEP 1: Conditional admin relaunch only if needed ===
+def is_admin():
+    if os.name != 'nt':
+        return True
+    try:
+        import ctypes
+        return ctypes.windll.shell32.IsUserAnAdmin()
+    except:
+        return False
+
+def relaunch_as_admin():
+    import ctypes
+    params = ' '.join([f'"{arg}"' for arg in sys.argv if arg != '--elevated']) + ' --elevated'
+    ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, params, None, 1)
+    sys.exit()
+
+# === STEP 2: Check and install packages ===
 def check_and_install(package, pip_name):
     try:
         __import__(package)
     except ImportError:
-        answer = messagebox.askyesno("Missing Package", f"'{pip_name}' is not installed. Install it now?")
-        if answer:
-            try:
-                subprocess.check_call([sys.executable, "-m", "pip", "install", pip_name])
-            except subprocess.CalledProcessError:
-                messagebox.showerror("Permission Denied",
-                    f"Failed to install '{pip_name}'.\n\nPlease re-run this program as administrator and try again.")
-                sys.exit(1)
-        else:
-            sys.exit()
+        try:
+            subprocess.check_call([sys.executable, "-m", "pip", "install", pip_name])
+        except subprocess.CalledProcessError:
+            if '--elevated' not in sys.argv:
+                resp = messagebox.askyesno("Admin Required",
+                    f"Missing package '{pip_name}' could not be installed.\n\nDo you want to relaunch this app as administrator to install it?")
+                if resp:
+                    relaunch_as_admin()
+            messagebox.showerror("Permission Denied", f"Could not install '{pip_name}'.")
+            sys.exit(1)
 
-# Only install if missing
-for pkg, pipname in zip(["fitz", "PIL", "fpdf", "PyPDF2"], ["pymupdf", "Pillow", "fpdf", "PyPDF2"]):
+# Package list
+for pkg, pipname in zip(
+    ["fitz", "PIL", "fpdf", "PyPDF2"],
+    ["pymupdf", "Pillow", "fpdf", "PyPDF2"]
+):
     check_and_install(pkg, pipname)
 
-# === STEP 2: Import all dependencies after confirming installation ===
+# === STEP 3: Import the confirmed packages ===
 import fitz
 from PIL import Image, ImageOps
 from fpdf import FPDF
 from PyPDF2 import PdfMerger
 
-# === STEP 3: PDF processing functions (same as before) ===
-def invert_colors_and_convert_to_images(pdf_path, output_dir):
-    doc = fitz.open(pdf_path)
-    image_paths = []
-    for page_num in range(len(doc)):
-        page = doc.load_page(page_num)
-        pix = page.get_pixmap()
-        for x in range(pix.width):
-            for y in range(pix.height):
-                pixel = pix.pixel(x, y)
-                if len(pixel) == 4:
-                    r, g, b, a = pixel
-                    pix.set_pixel(x, y, (255 - r, 255 - g, 255 - b, a))
-                else:
-                    r, g, b = pixel
-                    pix.set_pixel(x, y, (255 - r, 255 - g, 255 - b))
-        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-        image_path = os.path.join(output_dir, f"page_{page_num + 1}.png")
-        img.save(image_path)
-        image_paths.append(image_path)
-    return image_paths
-
-def convert_pdf_to_images(pdf_path, output_dir):
-    doc = fitz.open(pdf_path)
-    image_paths = []
-    for page_num in range(len(doc)):
-        page = doc.load_page(page_num)
-        pix = page.get_pixmap()
-        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-        image_path = os.path.join(output_dir, f"page_{page_num + 1}.png")
-        img.save(image_path)
-        image_paths.append(image_path)
-    return image_paths
-
-def arrange_images_on_a4(images, output_pdf_path):
-    a4_width, a4_height = (2480, 3508)
-    image_height = a4_height // 3
-    pages = []
-    for i in range(0, len(images), 3):
-        page_images = images[i:i+3]
-        page = Image.new('RGB', (a4_width, a4_height), 'white')
-        for j, img_path in enumerate(page_images):
-            img = Image.open(img_path)
-            img = img.resize((a4_width, image_height))
-            page.paste(img, (0, j * image_height))
-        pages.append(page)
-    if pages:
-        pages[0].save(output_pdf_path, save_all=True, append_images=pages[1:])
-
-def merge_pdfs(pdf_list, output_path):
-    merger = PdfMerger()
-    for pdf in pdf_list:
-        merger.append(pdf)
-    merger.write(output_path)
-    merger.close()
-
-def invert_colors_and_save_as_png(input_pdf_path, output_folder):
-    pdf_document = fitz.open(input_pdf_path)
-    os.makedirs(output_folder, exist_ok=True)
-    for page_number in range(len(pdf_document)):
-        page = pdf_document.load_page(page_number)
-        pix = page.get_pixmap()
-        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-        inverted_img = ImageOps.invert(img)
-        output_path = os.path.join(output_folder, f"{os.path.basename(input_pdf_path).split('.')[0]}_page_{page_number + 1}.png")
-        inverted_img.save(output_path)
-
-def process_directory(input_dir, output_dir):
-    os.makedirs(output_dir, exist_ok=True)
-    for filename in os.listdir(input_dir):
-        if filename.endswith(".pdf"):
-            input_pdf_path = os.path.join(input_dir, filename)
-            individual_output_folder = os.path.join(output_dir, os.path.splitext(filename)[0])
-            invert_colors_and_save_as_png(input_pdf_path, individual_output_folder)
-
-def process_pdfs(input_dir, output_dir):
-    for filename in os.listdir(input_dir):
-        if filename.endswith(".pdf"):
-            input_path = os.path.join(input_dir, filename)
-            output_pdf_path = os.path.join(output_dir, f"{filename[:-4]}_arranged.pdf")
-            os.makedirs(output_dir, exist_ok=True)
-            image_paths = invert_colors_and_convert_to_images(input_path, output_dir)
-            arrange_images_on_a4(image_paths, output_pdf_path)
-            for img_path in image_paths:
-                os.remove(img_path)
-
-def arrange_pdfs(input_dir, output_dir):
-    for filename in os.listdir(input_dir):
-        if filename.endswith(".pdf"):
-            input_path = os.path.join(input_dir, filename)
-            output_pdf_path = os.path.join(output_dir, f"{filename[:-4]}_arranged.pdf")
-            os.makedirs(output_dir, exist_ok=True)
-            image_paths = convert_pdf_to_images(input_path, output_dir)
-            arrange_images_on_a4(image_paths, output_pdf_path)
-            for img_path in image_paths:
-                os.remove(img_path)
-
-# === STEP 4: GUI with dark theme, progress bar, and clean handling ===
+# === STEP 4: GUI Class ===
 class PDFToolApp:
     def __init__(self, root):
         self.root = root
@@ -141,14 +65,21 @@ class PDFToolApp:
         style = ttk.Style(self.root)
         self.root.configure(bg="#2b2b2b")
         style.theme_use("clam")
+
         style.configure("TLabel", background="#2b2b2b", foreground="white")
         style.configure("TButton", background="#3c3f41", foreground="white")
         style.configure("TEntry", fieldbackground="#3c3f41", foreground="white")
         style.configure("TCombobox", fieldbackground="#3c3f41", background="#3c3f41", foreground="white")
         style.configure("Horizontal.TProgressbar", troughcolor="#444", background="#6a9fb5", bordercolor="#444")
 
+        style.map("TCombobox",
+            fieldbackground=[('readonly', '#3c3f41')],
+            background=[('readonly', '#3c3f41')],
+            foreground=[('readonly', 'white')]
+        )
+
     def create_widgets(self):
-        ttk.Label(self.root, text="Select Operation:").pack(pady=(10,0))
+        ttk.Label(self.root, text="Select Operation:").pack(pady=(10, 0))
         self.operation_var = tk.StringVar()
         self.operation_box = ttk.Combobox(self.root, textvariable=self.operation_var, state="readonly", width=55)
         self.operation_box['values'] = [
@@ -218,15 +149,15 @@ class PDFToolApp:
 
         try:
             if op.startswith("1"):
-                process_pdfs(input_path, output_path)
+                self.process_pdfs(input_path, output_path)
             elif op.startswith("2"):
                 output_pdf = os.path.join(output_path, "merged_output.pdf")
                 files = [os.path.join(input_path, f) for f in os.listdir(input_path) if f.endswith(".pdf")]
-                merge_pdfs(files, output_pdf)
+                self.merge_pdfs(files, output_pdf)
             elif op.startswith("3"):
-                process_directory(input_path, output_path)
+                self.process_directory(input_path, output_path)
             elif op.startswith("4"):
-                arrange_pdfs(input_path, output_path)
+                self.arrange_pdfs(input_path, output_path)
 
             messagebox.showinfo("Success", "Operation completed successfully.")
 
@@ -236,8 +167,110 @@ class PDFToolApp:
         self.progress.stop()
         self.enable_ui()
 
-# === STEP 5: Launch the app ===
+    # === PDF logic (same as before) ===
+
+    def process_pdfs(self, input_dir, output_dir):
+        for filename in os.listdir(input_dir):
+            if filename.endswith(".pdf"):
+                input_path = os.path.join(input_dir, filename)
+                output_pdf_path = os.path.join(output_dir, f"{filename[:-4]}_arranged.pdf")
+                os.makedirs(output_dir, exist_ok=True)
+                image_paths = self.invert_colors_and_convert_to_images(input_path, output_dir)
+                self.arrange_images_on_a4(image_paths, output_pdf_path)
+                for img_path in image_paths:
+                    os.remove(img_path)
+
+    def merge_pdfs(self, pdf_list, output_path):
+        merger = PdfMerger()
+        for pdf in pdf_list:
+            merger.append(pdf)
+        merger.write(output_path)
+        merger.close()
+
+    def process_directory(self, input_dir, output_dir):
+        os.makedirs(output_dir, exist_ok=True)
+        for filename in os.listdir(input_dir):
+            if filename.endswith(".pdf"):
+                input_pdf_path = os.path.join(input_dir, filename)
+                individual_output_folder = os.path.join(output_dir, os.path.splitext(filename)[0])
+                self.invert_colors_and_save_as_png(input_pdf_path, individual_output_folder)
+
+    def arrange_pdfs(self, input_dir, output_dir):
+        for filename in os.listdir(input_dir):
+            if filename.endswith(".pdf"):
+                input_path = os.path.join(input_dir, filename)
+                output_pdf_path = os.path.join(output_dir, f"{filename[:-4]}_arranged.pdf")
+                os.makedirs(output_dir, exist_ok=True)
+                image_paths = self.convert_pdf_to_images(input_path, output_dir)
+                self.arrange_images_on_a4(image_paths, output_pdf_path)
+                for img_path in image_paths:
+                    os.remove(img_path)
+
+    def invert_colors_and_convert_to_images(self, pdf_path, output_dir):
+        doc = fitz.open(pdf_path)
+        image_paths = []
+        for page_num in range(len(doc)):
+            page = doc.load_page(page_num)
+            pix = page.get_pixmap()
+            for x in range(pix.width):
+                for y in range(pix.height):
+                    pixel = pix.pixel(x, y)
+                    if len(pixel) == 4:
+                        r, g, b, a = pixel
+                        pix.set_pixel(x, y, (255 - r, 255 - g, 255 - b, a))
+                    else:
+                        r, g, b = pixel
+                        pix.set_pixel(x, y, (255 - r, 255 - g, 255 - b))
+            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+            image_path = os.path.join(output_dir, f"page_{page_num + 1}.png")
+            img.save(image_path)
+            image_paths.append(image_path)
+        return image_paths
+
+    def convert_pdf_to_images(self, pdf_path, output_dir):
+        doc = fitz.open(pdf_path)
+        image_paths = []
+        for page_num in range(len(doc)):
+            page = doc.load_page(page_num)
+            pix = page.get_pixmap()
+            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+            image_path = os.path.join(output_dir, f"page_{page_num + 1}.png")
+            img.save(image_path)
+            image_paths.append(image_path)
+        return image_paths
+
+    def arrange_images_on_a4(self, images, output_pdf_path):
+        a4_width, a4_height = (2480, 3508)
+        image_height = a4_height // 3
+        pages = []
+        for i in range(0, len(images), 3):
+            page_images = images[i:i+3]
+            page = Image.new('RGB', (a4_width, a4_height), 'white')
+            for j, img_path in enumerate(page_images):
+                img = Image.open(img_path)
+                img = img.resize((a4_width, image_height))
+                page.paste(img, (0, j * image_height))
+            pages.append(page)
+        if pages:
+            pages[0].save(output_pdf_path, save_all=True, append_images=pages[1:])
+
+    def invert_colors_and_save_as_png(self, input_pdf_path, output_folder):
+        pdf_document = fitz.open(input_pdf_path)
+        os.makedirs(output_folder, exist_ok=True)
+        for page_number in range(len(pdf_document)):
+            page = pdf_document.load_page(page_number)
+            pix = page.get_pixmap()
+            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+            inverted_img = ImageOps.invert(img)
+            output_path = os.path.join(output_folder, f"{os.path.basename(input_pdf_path).split('.')[0]}_page_{page_number + 1}.png")
+            inverted_img.save(output_path)
+
+# === Launch GUI ===
 if __name__ == "__main__":
-    root = tk.Tk()
-    app = PDFToolApp(root)
-    root.mainloop()
+    try:
+        root = tk.Tk()
+        app = PDFToolApp(root)
+        root.mainloop()
+    except Exception as e:
+        print("GUI failed:", e)
+        input("Press Enter to exit...")
